@@ -1,0 +1,43 @@
+#FROM ubuntu:16.04
+FROM nvidia/cuda:9.0-cudnn7-devel-ubuntu16.04
+RUN apt-get update
+RUN apt-get install -y apt-utils vim unzip curl ca-certificates libjpeg-dev libpng-dev cmake g++ make gcc g++ git pkg-config libgtk2.0-dev libeigen3-dev wget
+RUN apt-get install -y module-init-tools pciutils freeglut3-dev build-essential libx11-dev libxmu-dev libxi-dev libgl1-mesa-glx libglu1-mesa libglu1-mesa-dev
+RUN apt-get install -y openssh-server
+RUN rm -rf /var/lib/apt/lists/* 
+
+RUN wget https://repo.anaconda.com/miniconda/Miniconda3-latest-Linux-x86_64.sh -O Miniconda3-latest-Linux-x86_64.sh && \
+    /bin/bash Miniconda3-latest-Linux-x86_64.sh -b -p /root/ML/tools/miniconda3 && \
+    rm Miniconda3-latest-Linux-x86_64.sh
+RUN /root/ML/tools/miniconda3/bin/conda install -y  python=3.6 opencv=3.4.1 matplotlib scikit-image cython numpy pyyaml scipy ipython ninja cython typing
+#RUN /root/ML/tools/miniconda3/bin/conda install -y  cudatoolkit=9.0 -c pytorch
+RUN /root/ML/tools/miniconda3/bin/conda install -y  pycocotools -c hcc
+RUN /root/ML/tools/miniconda3/bin/conda install -y  pytorch=0.4.1 torchvision  -c pytorch
+RUN /root/ML/tools/miniconda3/bin/conda install -y  jupyter
+RUN /root/ML/tools/miniconda3/bin/conda clean -ya
+
+
+RUN mkdir /var/run/sshd
+RUN echo 'root:123' | chpasswd
+RUN sed -i 's/PermitRootLogin prohibit-password/PermitRootLogin yes/' /etc/ssh/sshd_config
+RUN sed 's@session\s*required\s*pam_loginuid.so@session optional pam_loginuid.so@g' -i /etc/pam.d/sshd
+RUN echo "export VISIBLE=now" >> /etc/profile
+
+RUN mkdir /root/.jupyter/
+COPY jupyter_notebook_config.py /root/.jupyter/jupyter_notebook_config.py
+
+COPY Dockerfile.devel.cuda9.cudnn7.python36.pytorch041.ubuntu1604 /root/Dockerfile
+COPY conda.rc /root/
+RUN cat /root/conda.rc >> ~/.bashrc
+RUN rm -f /root/conda.rc
+
+COPY entrypoint.sh /root/entrypoint.sh
+RUN echo 'nohup jupyter-notebook > /dev/null 2>&1 &' >> ~/.bashrc
+RUN echo 'echo "devel.cuda9.cudnn7.python36.pytorch041.opencv341.ubuntu1604"' >> ~/.bashrc
+#RUN echo 'service ssh start' >> ~/.bashrc
+
+RUN mkdir -p /space
+RUN ln -s /space /root/ML/workspace
+WORKDIR /space
+ENTRYPOINT ["/bin/bash", "/root/entrypoint.sh"]
+

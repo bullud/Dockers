@@ -1,0 +1,214 @@
+image: docker:stable
+
+# NOTE: The docker:stable-dind service is not used here because --add-runtime=nvidia does not work and we need the runtime to
+#       perform tests
+
+variables:
+  GIT_DEPTH: "1"
+  IMAGE_NAME: "${CI_PROJECT_NAMESPACE}/${CI_PROJECT_NAME}"
+  OS: "${CI_COMMIT_REF_NAME}"
+
+before_script:
+  - apk add --no-cache git bash findutils
+  - if [[ ! -z $NV_CI_INTERNAL ]]; then
+      export REGISTRY="gitlab-master.nvidia.com:5005";
+      export REGISTRY_USER="gitlab-ci-token";
+      export REGISTRY_TOKEN="${CI_JOB_TOKEN}";
+      export IMAGE_NAME="${REGISTRY}/${IMAGE_NAME}";
+    fi
+  - docker login -u "${REGISTRY_USER}" -p "${REGISTRY_TOKEN}" "${REGISTRY}";
+
+stages:
+  - cuda
+  - cudnn
+  - test
+  - deploy
+
+.tags_template: &tags_definition
+  tags:
+    - cuda-docker-10.1
+
+.cuda_template: &cuda_definition
+  stage: cuda
+  <<: *tags_definition
+  script:
+    - VERSION="${CI_JOB_NAME:1}"
+    - docker build -t "${IMAGE_NAME}:${VERSION}-runtime-${OS}"
+                   --cache-from "${IMAGE_NAME}:${VERSION}-runtime-${OS}-disable"
+                   "${VERSION}/runtime"
+    - docker build -t "${IMAGE_NAME}:${VERSION}-devel-${OS}"
+                   --cache-from "${IMAGE_NAME}:${VERSION}-devel-${OS}-disable"
+                   --build-arg "IMAGE_NAME=${IMAGE_NAME}"
+                   "${VERSION}/devel"
+    - if [[ "${NO_OS_SUFFIX}" == true ]]; then
+        docker tag "${IMAGE_NAME}:${VERSION}-runtime-${OS}" "${IMAGE_NAME}:${VERSION}-runtime";
+        docker tag "${IMAGE_NAME}:${VERSION}-devel-${OS}" "${IMAGE_NAME}:${VERSION}-devel";
+      fi
+    - if [[ "${LATEST}" == true ]]; then
+        docker tag "${IMAGE_NAME}:${VERSION}-devel-${OS}" "${IMAGE_NAME}:latest";
+      fi
+
+.cuda_base_template: &cuda_base_definition
+  stage: cuda
+  <<: *tags_definition
+  script:
+    - VERSION="${CI_JOB_NAME:1}"
+    - docker build -t "${IMAGE_NAME}:${VERSION}-base-${OS}"
+                   --cache-from "${IMAGE_NAME}:${VERSION}-base-${OS}-disable"
+                   "${VERSION}/base"
+    - docker build -t "${IMAGE_NAME}:${VERSION}-runtime-${OS}"
+                   --cache-from "${IMAGE_NAME}:${VERSION}-runtime-${OS}-disable"
+                   --build-arg "IMAGE_NAME=${IMAGE_NAME}"
+                   "${VERSION}/runtime"
+    - docker build -t "${IMAGE_NAME}:${VERSION}-devel-${OS}"
+                   --cache-from "${IMAGE_NAME}:${VERSION}-devel-${OS}-disable"
+                   --build-arg "IMAGE_NAME=${IMAGE_NAME}"
+                   "${VERSION}/devel"
+    - if [[ "${NO_OS_SUFFIX}" == true ]]; then
+        docker tag "${IMAGE_NAME}:${VERSION}-base-${OS}" "${IMAGE_NAME}:${VERSION}-base";
+        docker tag "${IMAGE_NAME}:${VERSION}-runtime-${OS}" "${IMAGE_NAME}:${VERSION}-runtime";
+        docker tag "${IMAGE_NAME}:${VERSION}-devel-${OS}" "${IMAGE_NAME}:${VERSION}-devel";
+      fi
+    - if [[ "${LATEST}" == true ]]; then
+        docker tag "${IMAGE_NAME}:${VERSION}-devel-${OS}" "${IMAGE_NAME}:latest";
+      fi
+
+.cudnn_template: &cudnn_definition
+  stage: cudnn
+  <<: *tags_definition
+  script:
+    - VERSION="${CI_JOB_NAME:1}"
+    - CUDA_VERSION="${VERSION%-*}"
+    - CUDNN_VERSION="${VERSION#*-}"
+    - docker build -t "${IMAGE_NAME}:${VERSION}-runtime-${OS}"
+                   --cache-from "${IMAGE_NAME}:${VERSION}-runtime-${OS}-disable"
+                   --build-arg "IMAGE_NAME=${IMAGE_NAME}"
+                   "${CUDA_VERSION}/runtime/${CUDNN_VERSION}"
+    - docker build -t "${IMAGE_NAME}:${VERSION}-devel-${OS}"
+                   --cache-from "${IMAGE_NAME}:${VERSION}-devel-${OS}-disable"
+                   --build-arg "IMAGE_NAME=${IMAGE_NAME}"
+                   "${CUDA_VERSION}/devel/${CUDNN_VERSION}"
+    - if [[ "${NO_OS_SUFFIX}" == true ]]; then
+        docker tag "${IMAGE_NAME}:${VERSION}-runtime-${OS}" "${IMAGE_NAME}:${VERSION}-runtime";
+        docker tag "${IMAGE_NAME}:${VERSION}-devel-${OS}" "${IMAGE_NAME}:${VERSION}-devel";
+      fi
+
+.test_template: &test_definition
+  stage: test
+  <<: *tags_definition
+  script:
+    - export CUDA_VERSION="${CI_JOB_NAME%-*}"
+    - export CUDA_TEST_VERSION="${CUDA_VERSION:1}"
+    - git clone https://gitlab.com/nvidia/cuda-docker-test.git
+    - cd cuda-docker-test/
+    - git log -1 --pretty=oneline
+    - bash -e ./scripts/bats_install.sh
+    - bash -e ./scripts/run_tests.sh
+
+.deploy_template: &deploy_definition
+  stage: deploy
+  <<: *tags_definition
+  script:
+    - docker images | grep ${IMAGE_NAME} | grep "${IMAGE_NAME}\ *${CI_JOB_NAME:1:-7}" | grep "\(${OS}\ \|-base\ \|-devel\ \|-runtime\ \)" | awk '{ print $1":"$2 }' | xargs -L1 docker push;
+    - if [[ ! -z $LATEST ]]; then
+        docker push ${IMAGE_NAME}:latest;
+      fi
+
+v8.0:
+  variables:
+    NO_OS_SUFFIX: "true"
+  <<: *cuda_definition
+
+v8.0-cudnn5:
+  variables:
+    NO_OS_SUFFIX: "true"
+  <<: *cudnn_definition
+
+v8.0-cudnn6:
+  variables:
+    NO_OS_SUFFIX: "true"
+  <<: *cudnn_definition
+
+v8.0-cudnn7:
+  variables:
+    NO_OS_SUFFIX: "true"
+  <<: *cudnn_definition
+
+.v8.0-test:
+  <<: *test_definition
+
+v8.0-deploy:
+  <<: *deploy_definition
+
+v9.0:
+  variables:
+    NO_OS_SUFFIX: "true"
+  <<: *cuda_base_definition
+
+v9.0-cudnn7:
+  variables:
+    NO_OS_SUFFIX: "true"
+  <<: *cudnn_definition
+
+.v9.0-test:
+  <<: *test_definition
+
+v9.0-deploy:
+  <<: *deploy_definition
+
+v9.1:
+  variables:
+    NO_OS_SUFFIX: "true"
+  <<: *cuda_base_definition
+
+v9.1-cudnn7:
+  variables:
+    NO_OS_SUFFIX: "true"
+  <<: *cudnn_definition
+
+.v9.1-test:
+  <<: *test_definition
+
+v9.1-deploy:
+  <<: *deploy_definition
+
+v9.2:
+  variables:
+    NO_OS_SUFFIX: "true"
+  <<: *cuda_base_definition
+
+v9.2-cudnn7:
+  variables:
+    NO_OS_SUFFIX: "true"
+  <<: *cudnn_definition
+
+.v9.2-test:
+  <<: *test_definition
+
+v9.2-deploy:
+  <<: *deploy_definition
+
+v10.0:
+  <<: *cuda_base_definition
+
+v10.0-cudnn7:
+  <<: *cudnn_definition
+
+.v10.0-test:
+  <<: *test_definition
+
+v10.0-deploy:
+  <<: *deploy_definition
+
+# NO_OS_SUFFIX is not defined here because these are set in the Ubuntu 18.04 release
+v10.1:
+  <<: *cuda_base_definition
+
+v10.1-cudnn7:
+  <<: *cudnn_definition
+
+v10.1-test:
+  <<: *test_definition
+
+v10.1-deploy:
+  <<: *deploy_definition
